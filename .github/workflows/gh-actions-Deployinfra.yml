@@ -3,55 +3,72 @@ name: Deploy Infrastructure
 on:
   push:
     branches:
-    - none
+      - master    # change to 'main' or whatever branch you use, or remove this block if you only want workflow_dispatch
   workflow_dispatch:
 
 permissions:
-      id-token: write
-      contents: read
+  id-token: write
+  contents: read
 
 jobs:
   DeployDevInfrastructure_Stage_DeployInfrastructure:
     name: Deploy Development Infrastructure
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - # "Note: the 'AZURE_CLIENT_ID' and 'AZURE_TENANT_ID' secret is required to be added into GitHub Secrets. See this blog post for details: https://samlearnsazure.blog/2019/12/13/github-actions/"
-      name: Azure Login
-      uses: azure/login@v2
-      with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        allow-no-subscriptions: true
+      - uses: actions/checkout@v3
 
-    - uses: azure/cli@v1.0.0
-      name: Create Resource Group
-      with:
-        inlineScript: |
-          az group create --name ${{ secrets.DEVRESOURCEGROUP }} --location ${{ secrets.LOCATION }} --tags LabInstance=${{ secrets.LABINSTANCEID }}
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
 
-          az group create --name ${{ secrets.PRODRESOURCEGROUP }} --location ${{ secrets.LOCATION }} --tags LabInstance=${{ secrets.LABINSTANCEID }}
-        azcliversion: latest
+      # DEBUG: inspect the OIDC token (remove this step once you have the "sub" value)
+      - name: Dump OIDC token (debug only)
+        run: |
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL=$ACTIONS_ID_TOKEN_REQUEST_URL"
+          echo "Requesting token..."
+          TOKEN=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r .value)
+          echo "Raw token (trim if long):"
+          echo "${TOKEN}"
+          echo "Decoded token claims:"
+          # decode payload (second JWT segment) and pretty print
+          PAYLOAD=$(echo "$TOKEN" | cut -d'.' -f2 | sed 's/-/_/g; s/+/ /g' | base64 --decode 2>/dev/null || true)
+          echo "$PAYLOAD" | jq -C .
 
-    - uses: azure/cli@v1.0.0
-      with:
-        inlineScript: az deployment group create --resource-group ${{ secrets.DEVRESOURCEGROUP }} --name deployinfradev --template-file ARM-DevSecOps.json
-        azcliversion: latest
+      - name: Create Resource Groups
+        uses: azure/cli@v1
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az group create --name "${{ secrets.DEVRESOURCEGROUP }}" --location "${{ secrets.LOCATION }}" --tags LabInstance="${{ secrets.LABINSTANCEID }}"
+            az group create --name "${{ secrets.PRODRESOURCEGROUP }}" --location "${{ secrets.LOCATION }}" --tags LabInstance="${{ secrets.LABINSTANCEID }}"
+
+      - name: Deploy DEV ARM template
+        uses: azure/cli@v1
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az deployment group create --resource-group "${{ secrets.DEVRESOURCEGROUP }}" --name deployinfradev --template-file ARM-DevSecOps.json
 
   DeployProdInfrastructure_Stage_DeployInfrastructure:
     name: Deploy Production Infrastructure
     needs: [DeployDevInfrastructure_Stage_DeployInfrastructure]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - # "Note: the 'AZURE_CLIENT_ID' and 'AZURE_TENANT_ID' secret is required to be added into GitHub Secrets. See this blog post for details: https://samlearnsazure.blog/2019/12/13/github-actions/"
-      name: Azure Login
-      uses: azure/login@v2
-      with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        allow-no-subscriptions: true
-    - uses: azure/cli@v1.0.0
-      with:
-        inlineScript: az deployment group create --resource-group ${{ secrets.PRODRESOURCEGROUP }} --name deployinfraprod --template-file ARM-DevSecOps-Prod.json
-        azcliversion: latest
+      - uses: actions/checkout@v3
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Deploy PROD ARM template
+        uses: azure/cli@v1
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az deployment group create --resource-group "${{ secrets.PRODRESOURCEGROUP }}" --name deployinfraprod --template-file ARM-DevSecOps-Prod.json
